@@ -1,0 +1,38 @@
+server:
+  port: 8000
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+              - PATCH
+            allowedHeaders: "*"
+      routes:
+        # Route 1: Client Storefront Service (Carts, Wishlists, Coupons, Checkout)
+        - id: client-service-route
+          uri: ${CLIENT_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/client/**
+
+        # Route 2: Core Catalog & Inventory Service
+        - id: core-service-route
+          uri: ${CORE_SERVICE_URL:http://localhost:8080}
+          predicates:
+            - Path=/api/v1/products/**, /api/v1/inventory/**, /api/v1/user/**, /api/v1/category/**, /api/v1/categories/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, gateway
