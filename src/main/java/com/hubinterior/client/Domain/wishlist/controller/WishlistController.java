@@ -7,6 +7,7 @@ import com.hubinterior.client.Domain.wishlist.dto.WishlistResponseDTO;
 import com.hubinterior.client.Domain.wishlist.service.WishlistService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,6 +24,17 @@ public class WishlistController {
     ) {
         WishlistResponseDTO response = wishlistService.getWishlist(clientId);
         return ResponseEntity.ok(ApiResponse.success("Wishlist fetched successfully", response));
+    }
+
+    @PostMapping("/items")
+    public ResponseEntity<ApiResponse<String>> addToWishlist(
+            @PathVariable("client_id") Long clientId,
+            @RequestParam("product_id") Long productId,
+            @RequestParam(value = "sku_id", required = false) String skuId
+    ) {
+        wishlistService.addToWishlist(clientId, productId, skuId);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("Product added to wishlist successfully", "Added"));
     }
 
     @PostMapping("/items/{wishlist_item_id}/move-to-cart")

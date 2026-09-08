@@ -12,7 +12,10 @@ import com.hubinterior.client.Domain.order.model.Order;
 import com.hubinterior.client.Domain.order.model.OrderItem;
 import com.hubinterior.client.Domain.order.repository.OrderRepository;
 import com.hubinterior.client.Exception.BusinessRuleException;
+import com.hubinterior.client.Exception.DuplicateResourceException;
+import com.hubinterior.client.Exception.ForbiddenException;
 import com.hubinterior.client.Exception.ResourceNotFoundException;
+import com.hubinterior.client.Exception.UnauthorizedException;
 import com.hubinterior.client.client.ProductCatalogFeignClient;
 import com.hubinterior.client.client.dto.*;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -33,9 +37,13 @@ public class CheckoutService {
 
     @Transactional
     public CheckoutInitiateResDTO initiateCheckout(Long clientId) {
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
+        }
+
         Cart cart = cartService.getOrCreateCart(clientId);
         if (cart.getItems() == null || cart.getItems().isEmpty()) {
-            throw new BusinessRuleException("Cannot initiate checkout on an empty cart");
+            throw new BusinessRuleException("Cannot initiate checkout on an empty cart.");
         }
 
         String orderNumber = "ORD-" + System.currentTimeMillis() + "-" + clientId;
@@ -52,7 +60,7 @@ public class CheckoutService {
         }
 
         if (holdRes == null || !holdRes.success()) {
-            String error = (holdRes != null && holdRes.message() != null) ? holdRes.message() : "Insufficient stock to complete checkout";
+            String error = (holdRes != null && holdRes.message() != null) ? holdRes.message() : "Insufficient stock to complete checkout.";
             throw new BusinessRuleException(error, "INSUFFICIENT_STOCK");
         }
 
@@ -103,11 +111,26 @@ public class CheckoutService {
 
     @Transactional
     public OrderResponseDTO confirmPayment(Long clientId, PaymentConfirmReqDTO req) {
-        Order order = orderRepo.findByIdAndClientId(req.order_id(), clientId)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found with id: " + req.order_id()));
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
+        }
+
+        Optional<Order> orderOpt = orderRepo.findById(req.order_id());
+        if (orderOpt.isEmpty()) {
+            throw new ResourceNotFoundException("Order not found with id: " + req.order_id());
+        }
+
+        Order order = orderOpt.get();
+        if (!order.getClientId().equals(clientId)) {
+            throw new ForbiddenException("Access denied: You do not have permission to confirm payment for another user's order.");
+        }
 
         if (order.getStatus() == OrderStatus.PAYMENT_COMPLETED) {
-            return mapToOrderResponse(order);
+            throw new DuplicateResourceException("Payment has already been processed for order: " + order.getOrderNumber());
+        }
+
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            throw new BusinessRuleException("Cannot complete payment on a cancelled order.");
         }
 
         if ("SUCCESS".equalsIgnoreCase(req.payment_status())) {
@@ -136,24 +159,64 @@ public class CheckoutService {
 
     @Transactional
     public OrderResponseDTO cancelCheckout(Long clientId, Long orderId) {
-        Order order = orderRepo.findByIdAndClientId(orderId, clientId)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found with id: " + orderId));
-
-        if (order.getStatus() == OrderStatus.PENDING_PAYMENT) {
-            releaseOrderHeldStock(order);
-            order.setStatus(OrderStatus.CANCELLED);
-            orderRepo.save(order);
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
         }
+
+        Optional<Order> orderOpt = orderRepo.findById(orderId);
+        if (orderOpt.isEmpty()) {
+            throw new ResourceNotFoundException("Order not found with id: " + orderId);
+        }
+
+        Order order = orderOpt.get();
+        if (!order.getClientId().equals(clientId)) {
+            throw new ForbiddenException("Access denied: You do not have permission to cancel another user's order.");
+        }
+
+        if (order.getStatus() == OrderStatus.PAYMENT_COMPLETED) {
+            throw new BusinessRuleException("Cannot cancel an order that has already been paid and completed.");
+        }
+
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            throw new BusinessRuleException("Order is already cancelled.");
+        }
+
+        releaseOrderHeldStock(order);
+        order.setStatus(OrderStatus.CANCELLED);
+        orderRepo.save(order);
 
         return mapToOrderResponse(order);
     }
 
     @Transactional(readOnly = true)
     public OrderResponseDTO getOrder(Long clientId, Long orderId) {
-        Order order = orderRepo.findByIdAndClientId(orderId, clientId)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found with id: " + orderId));
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
+        }
+
+        Optional<Order> orderOpt = orderRepo.findById(orderId);
+        if (orderOpt.isEmpty()) {
+            throw new ResourceNotFoundException("Order not found with id: " + orderId);
+        }
+
+        Order order = orderOpt.get();
+        if (!order.getClientId().equals(clientId)) {
+            throw new ForbiddenException("Access denied: You do not have permission to view another user's order.");
+        }
+
         return mapToOrderResponse(order);
     }
+
+    @Transactional(readOnly = true)
+    public List<OrderResponseDTO> getClientOrders(Long clientId) {
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
+        }
+        return orderRepo.findByClientIdOrderByCreatedAtDesc(clientId).stream()
+                .map(this::mapToOrderResponse)
+                .collect(Collectors.toList());
+    }
+
 
     private void releaseOrderHeldStock(Order order) {
         if (order.getHoldReference() != null && !order.getItems().isEmpty()) {

@@ -7,7 +7,10 @@ import com.hubinterior.client.Domain.wishlist.dto.MoveToCartResponseDTO;
 import com.hubinterior.client.Domain.wishlist.dto.WishlistResponseDTO;
 import com.hubinterior.client.Domain.wishlist.model.WishlistItem;
 import com.hubinterior.client.Domain.wishlist.repository.WishlistItemRepository;
+import com.hubinterior.client.Exception.DuplicateResourceException;
+import com.hubinterior.client.Exception.ForbiddenException;
 import com.hubinterior.client.Exception.ResourceNotFoundException;
+import com.hubinterior.client.Exception.UnauthorizedException;
 import com.hubinterior.client.client.ProductCatalogFeignClient;
 import com.hubinterior.client.client.dto.ProductBatchReqDTO;
 import com.hubinterior.client.client.dto.ProductSummaryInternalDTO;
@@ -31,6 +34,10 @@ public class WishlistService {
 
     @Transactional(readOnly = true)
     public WishlistResponseDTO getWishlist(Long clientId) {
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
+        }
+
         List<WishlistItem> items = wishlistRepo.findByClientId(clientId);
 
         List<Long> productIds = items.stream()
@@ -82,21 +89,44 @@ public class WishlistService {
 
     @Transactional
     public void addToWishlist(Long clientId, Long productId, String skuId) {
-        Optional<WishlistItem> existingOpt = wishlistRepo.findByClientIdAndProductId(clientId, productId);
-        if (existingOpt.isEmpty()) {
-            wishlistRepo.save(WishlistItem.builder()
-                    .clientId(clientId)
-                    .productId(productId)
-                    .skuId(skuId)
-                    .build());
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
         }
+
+        // 1. Check duplicate
+        Optional<WishlistItem> existingOpt = wishlistRepo.findByClientIdAndProductId(clientId, productId);
+        if (existingOpt.isPresent()) {
+            throw new DuplicateResourceException("Product with ID " + productId + " is already present in your wishlist.");
+        }
+
+        // 2. Check product exists in catalog
+        ProductSummaryInternalDTO prod = productCatalogClient.getProductSummary(productId);
+        if (prod == null) {
+            throw new ResourceNotFoundException("Product with ID " + productId + " does not exist in catalog.");
+        }
+
+        wishlistRepo.save(WishlistItem.builder()
+                .clientId(clientId)
+                .productId(productId)
+                .skuId(skuId != null ? skuId : prod.sku_id())
+                .build());
     }
 
     @Transactional
     public MoveToCartResponseDTO moveToCart(Long clientId, Long wishlistItemId, int quantity) {
-        WishlistItem wishlistItem = wishlistRepo.findById(wishlistItemId)
-                .filter(w -> w.getClientId().equals(clientId))
-                .orElseThrow(() -> new ResourceNotFoundException("Wishlist item not found with id: " + wishlistItemId));
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
+        }
+
+        Optional<WishlistItem> itemOpt = wishlistRepo.findById(wishlistItemId);
+        if (itemOpt.isEmpty()) {
+            throw new ResourceNotFoundException("Wishlist item not found with id: " + wishlistItemId);
+        }
+
+        WishlistItem wishlistItem = itemOpt.get();
+        if (!wishlistItem.getClientId().equals(clientId)) {
+            throw new ForbiddenException("Access denied: You do not have permission to modify another user's wishlist item.");
+        }
 
         Long productId = wishlistItem.getProductId();
 
@@ -122,9 +152,20 @@ public class WishlistService {
 
     @Transactional
     public void removeFromWishlist(Long clientId, Long wishlistItemId) {
-        WishlistItem item = wishlistRepo.findById(wishlistItemId)
-                .filter(w -> w.getClientId().equals(clientId))
-                .orElseThrow(() -> new ResourceNotFoundException("Wishlist item not found with id: " + wishlistItemId));
+        if (clientId == null || clientId <= 0) {
+            throw new UnauthorizedException("Valid client ID / authentication context is required.");
+        }
+
+        Optional<WishlistItem> itemOpt = wishlistRepo.findById(wishlistItemId);
+        if (itemOpt.isEmpty()) {
+            throw new ResourceNotFoundException("Wishlist item not found with id: " + wishlistItemId);
+        }
+
+        WishlistItem item = itemOpt.get();
+        if (!item.getClientId().equals(clientId)) {
+            throw new ForbiddenException("Access denied: You do not have permission to remove another user's wishlist item.");
+        }
+
         wishlistRepo.delete(item);
     }
 

@@ -11,6 +11,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1/client/{client_id}/checkout")
 @RequiredArgsConstructor
@@ -56,4 +58,14 @@ public class CheckoutController {
         OrderResponseDTO response = checkoutService.getOrder(clientId, orderId);
         return ResponseEntity.ok(ApiResponse.success("Order fetched successfully", response));
     }
+
+    @GetMapping("/orders")
+    public ResponseEntity<ApiResponse<List<OrderResponseDTO>>> getClientOrders(
+            @PathVariable("client_id") Long clientId
+    ) {
+        List<OrderResponseDTO> orders = checkoutService.getClientOrders(clientId);
+        return ResponseEntity.ok(ApiResponse.success("Client orders retrieved successfully", orders));
+    }
+
 }
+

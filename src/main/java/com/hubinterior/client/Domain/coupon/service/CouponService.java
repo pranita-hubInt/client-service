@@ -4,10 +4,12 @@ import com.hubinterior.client.Domain.coupon.enums.DiscountType;
 import com.hubinterior.client.Domain.coupon.model.Coupon;
 import com.hubinterior.client.Domain.coupon.repository.CouponRepository;
 import com.hubinterior.client.Exception.BusinessRuleException;
+import com.hubinterior.client.Exception.DuplicateResourceException;
 import com.hubinterior.client.Exception.ResourceNotFoundException;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -54,21 +56,34 @@ public class CouponService {
 
     public Coupon getValidCoupon(String couponCode) {
         if (couponCode == null || couponCode.trim().isEmpty()) {
-            return null;
+            throw new BusinessRuleException("Coupon code cannot be null or empty.");
         }
 
         Coupon coupon = couponRepo.findByCouponCodeIgnoreCase(couponCode.trim())
                 .orElseThrow(() -> new ResourceNotFoundException("Coupon '" + couponCode + "' not found"));
 
         if (!coupon.isActive()) {
-            throw new BusinessRuleException("Coupon '" + couponCode + "' is currently inactive or expired", "COUPON_INACTIVE");
+            throw new BusinessRuleException("Coupon '" + couponCode + "' is currently inactive or disabled", "COUPON_INACTIVE");
         }
 
         if (coupon.getValidUntil() != null && coupon.getValidUntil().isBefore(LocalDateTime.now())) {
-            throw new BusinessRuleException("Coupon '" + couponCode + "' has expired", "COUPON_EXPIRED");
+            throw new BusinessRuleException("Coupon '" + couponCode + "' has expired on " + coupon.getValidUntil(), "COUPON_EXPIRED");
         }
 
         return coupon;
+    }
+
+    @Transactional
+    public Coupon createCoupon(Coupon coupon) {
+        if (coupon.getCouponCode() == null || coupon.getCouponCode().trim().isEmpty()) {
+            throw new BusinessRuleException("Coupon code is mandatory.");
+        }
+
+        if (couponRepo.findByCouponCodeIgnoreCase(coupon.getCouponCode().trim()).isPresent()) {
+            throw new DuplicateResourceException("Coupon code '" + coupon.getCouponCode() + "' already exists.");
+        }
+
+        return couponRepo.save(coupon);
     }
 
     public Optional<Coupon> findByCode(String couponCode) {
